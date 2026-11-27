@@ -1,0 +1,32 @@
+{
+  "name": "sl-unity-course-wrapper",
+  "version": "0.2.0",
+  "description": "A cross-platform Stacked Learning shell for one Unity WebGL course",
+  "main": "src/main.cjs",
+  "author": "Stacked Learning",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "start:oobe": "electron . --oobe",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win nsis zip --x64",
+    "dist:mac": "electron-builder --mac dmg zip --x64 --arm64"
+  },
+  "dependencies": {
+    "extract-zip": "^2.0.1"
+  },
+  "devDependencies": {
+    "electron": "^45.5.0",
+    "electron-builder": "^26.17.0"
+  },
+  "build": {
+    "appId": "com.stackedlearning.unitycoursewrapper",
+    "productName": "SL Course Wrapper",
+    "asar": true,
+    "files": ["src/**/*", "package.json"],
+    "directories": { "output": "dist" },
+    "win": { "icon": "build/icon.ico", "target": ["nsis", "zip"], "artifactName": "SL-Course-Wrapper-${version}-Windows.${ext}" },
+    "nsis": { "oneClick": true, "perMachine": false, "allowToChangeInstallationDirectory": false },
+    "mac": { "icon": "build/icon.icns", "target": ["dmg", "zip"], "category": "public.app-category.education", "artifactName": "SL-Course-Wrapper-${version}-${arch}-macOS.${ext}" }
+  }
+}
