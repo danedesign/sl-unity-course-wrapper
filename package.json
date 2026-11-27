@@ -1,6 +1,6 @@
 {
   "name": "sl-unity-course-wrapper",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A cross-platform Stacked Learning shell for one Unity WebGL course",
   "main": "src/main.cjs",
   "author": "Stacked Learning",
@@ -13,6 +13,7 @@
     "dist:mac": "electron-builder --mac dmg zip --universal --publish never"
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "extract-zip": "^2.0.1"
   },
   "devDependencies": {
@@ -23,11 +24,49 @@
     "appId": "com.stackedlearning.unitycoursewrapper",
     "productName": "SL Course Wrapper",
     "asar": true,
-    "files": ["src/**/*", "package.json"],
-    "extraResources": [{ "from": "build/templates", "to": "templates", "filter": ["*.zip"] }],
-    "directories": { "output": "dist" },
-    "win": { "icon": "build/icon.ico", "target": ["nsis", "zip"], "artifactName": "SL-Course-Wrapper-${version}-Windows.${ext}" },
-    "nsis": { "oneClick": true, "perMachine": false, "allowToChangeInstallationDirectory": false },
-    "mac": { "icon": "build/icon.icns", "target": ["dmg", "zip"], "category": "public.app-category.education", "artifactName": "SL-Course-Wrapper-${version}-${arch}-macOS.${ext}" }
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/templates",
+        "to": "templates",
+        "filter": [
+          "*.zip"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "artifactName": "SL-Course-Wrapper-${version}-Windows.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    },
+    "mac": {
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.education",
+      "artifactName": "SL-Course-Wrapper-${version}-${arch}-macOS.${ext}"
+    },
+    "publish": [{
+      "provider": "github",
+      "owner": "stacked-learning",
+      "repo": "sl-unity-course-wrapper",
+      "releaseType": "release"
+    }]
   }
 }

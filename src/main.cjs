@@ -5,6 +5,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { randomUUID } = require('node:crypto');
 const extractZip = require('extract-zip');
+const updateConfig = require('./update-config.cjs');
 
 function embeddedCourseRoot() {
   const candidates = [path.join(process.resourcesPath, 'course')];
@@ -14,9 +15,13 @@ function embeddedCourseRoot() {
 }
 const EMBEDDED_COURSE_DIR = embeddedCourseRoot();
 const EMBEDDED_META_FILE = path.join(path.dirname(EMBEDDED_COURSE_DIR), 'course.json');
+let embeddedWrapper = false;
 try {
   const embeddedMeta = JSON.parse(fs.readFileSync(EMBEDDED_META_FILE, 'utf8'));
-  if (embeddedMeta.wrapperId) app.setPath('userData', path.join(app.getPath('appData'), 'Stacked Learning Courses', embeddedMeta.wrapperId));
+  if (embeddedMeta.wrapperId) {
+    embeddedWrapper = true;
+    app.setPath('userData', path.join(app.getPath('appData'), 'Stacked Learning Courses', embeddedMeta.wrapperId));
+  }
 } catch {}
 const USER_COURSE_DIR = path.join(app.getPath('userData'), 'course');
 const USER_META_FILE = path.join(app.getPath('userData'), 'course.json');
@@ -28,6 +33,8 @@ let courseWindow;
 let server;
 let courseMeta = null;
 let busy = false;
+let programUpdater = null;
+let updaterCheckStarted = false;
 
 function mimeFor(file) {
   const bare = file.replace(/\.(br|gz)$/i, '');
@@ -202,6 +209,59 @@ function createMainWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
+function sendUpdater(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
+
+function compareVersions(left, right) {
+  const a = String(left).split('.').map(Number), b = String(right).split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const delta = (a[i] || 0) - (b[i] || 0);
+    if (delta) return Math.sign(delta);
+  }
+  return 0;
+}
+
+async function githubApi(url) {
+  const response = await fetch(url, { headers: { Accept:'application/vnd.github+json', 'X-GitHub-Api-Version':'2022-11-28' } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message || `GitHub update request failed (${response.status}).`);
+  return body;
+}
+
+async function startUpdateCheck() {
+  if (embeddedWrapper || !app.isPackaged) return { skipped:true };
+  if (updaterCheckStarted) return { checking:true };
+  updaterCheckStarted = true;
+  try {
+    if (process.platform === 'darwin') {
+      const release = await githubApi(`https://api.github.com/repos/${updateConfig.githubOwner}/${updateConfig.githubRepo}/releases/latest`);
+      const version = String(release.tag_name || '').replace(/^v/, '');
+      if (compareVersions(version, app.getVersion()) > 0) sendUpdater('updater:available', { version, releaseUrl:release.html_url, platform:'macos', manual:true });
+      else sendUpdater('updater:current', { version:app.getVersion() });
+      return { checked:true };
+    }
+    if (!programUpdater) {
+      const { autoUpdater } = require('electron-updater');
+      programUpdater = autoUpdater;
+      programUpdater.autoDownload = false;
+      programUpdater.autoInstallOnAppQuit = false;
+      programUpdater.setFeedURL({ provider:'github', owner:updateConfig.githubOwner, repo:updateConfig.githubRepo });
+      programUpdater.on('checking-for-update', () => sendUpdater('updater:checking'));
+      programUpdater.on('update-available', info => sendUpdater('updater:available', { version:info.version, platform:'windows' }));
+      programUpdater.on('update-not-available', info => sendUpdater('updater:current', { version:info.version || app.getVersion() }));
+      programUpdater.on('download-progress', progress => sendUpdater('updater:progress', { percent:Math.round(progress.percent) }));
+      programUpdater.on('update-downloaded', info => sendUpdater('updater:downloaded', { version:info.version }));
+      programUpdater.on('error', error => sendUpdater('updater:error', { message:error.message || 'Update check failed.' }));
+    }
+    await programUpdater.checkForUpdates();
+    return { checked:true };
+  } catch (error) {
+    sendUpdater('updater:error', { message:error.message || 'Update check failed.' });
+    return { checked:false, error:error.message };
+  } finally { updaterCheckStarted = false; }
+}
+
 const ownsAppLock = app.requestSingleInstanceLock();
 if (!ownsAppLock) app.quit();
 else app.on('second-instance', (_event, argv) => {
@@ -224,6 +284,22 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('before-quit', () => { server?.close(); });
 
 ipcMain.handle('course:status', async () => ({ meta:courseMeta, oobe:oobeRequested, busy }));
+ipcMain.handle('updater:check', startUpdateCheck);
+ipcMain.handle('updater:download', async () => {
+  if (process.platform === 'darwin') return { manual:true };
+  if (!programUpdater) await startUpdateCheck();
+  if (!programUpdater) throw new Error('Update service is not available.');
+  return programUpdater.downloadUpdate();
+});
+ipcMain.handle('updater:install', () => {
+  if (!programUpdater || process.platform !== 'win32') throw new Error('Automatic installation is available in the Windows maker build.');
+  programUpdater.quitAndInstall(false, true);
+});
+ipcMain.handle('updater:open-release', async (_event, url) => {
+  const prefix = `https://github.com/${updateConfig.githubOwner}/${updateConfig.githubRepo}/releases/`;
+  if (typeof url !== 'string' || !url.startsWith(prefix)) throw new Error('Invalid update release URL.');
+  return shell.openExternal(url);
+});
 ipcMain.handle('course:platforms', () => ({ windows:fs.existsSync(path.join(process.resourcesPath,'templates','windows.zip')), macos:fs.existsSync(path.join(process.resourcesPath,'templates','macos-universal.zip')) }));
 ipcMain.handle('course:choose', async () => chooseCourse());
 ipcMain.handle('course:import-path', async (_event, p) => importCourse(p));

@@ -70,3 +70,53 @@ window.slCourse.status().then(async ({meta,oobe}) => {
 });
 window.slCourse.onDroppedImport(meta => { setBusy(false); render(meta); showStatus('Course imported. Set its display name, then launch it.', true); });
 window.slCourse.onDroppedError(message => { setBusy(false); showStatus(message || 'Could not import this build.'); });
+const updaterCard = $('updater-card');
+const updaterTitle = $('updater-title');
+const updaterDetail = $('updater-detail');
+const updateNow = $('update-now');
+const updateLater = $('update-later');
+let availableUpdate = null;
+
+window.slCourse.onUpdate((channel, info = {}) => {
+  if (channel === 'updater:checking') {
+    updaterCard.classList.remove('hidden'); updaterTitle.textContent = 'Checking for program updates…'; updaterDetail.textContent = ''; return;
+  }
+  if (channel === 'updater:current') {
+    updaterCard.classList.remove('hidden'); updaterTitle.textContent = `You’re up to date · v${info.version}`; updaterDetail.textContent = '';
+    updateNow.classList.add('hidden'); updateLater.classList.add('hidden'); return;
+  }
+  if (channel === 'updater:available') {
+    availableUpdate = info; updaterCard.classList.remove('hidden');
+    updaterTitle.textContent = `Version ${info.version} is available`;
+    updaterDetail.textContent = info.manual ? 'macOS updates must be installed manually until the app is code signed.' : 'Download now, or check again next launch.';
+    updateLater.classList.remove('hidden'); updateLater.textContent = 'Next launch'; updateNow.classList.remove('hidden');
+    updateNow.disabled = false; updateNow.textContent = info.manual ? 'Download update' : 'Update now'; return;
+  }
+  if (channel === 'updater:progress') {
+    updaterTitle.textContent = 'Downloading program update…'; updaterDetail.textContent = `${info.percent || 0}%`;
+    updateNow.classList.add('hidden'); updateLater.classList.add('hidden'); return;
+  }
+  if (channel === 'updater:downloaded') {
+    updaterTitle.textContent = `Version ${info.version} is ready`; updaterDetail.textContent = 'Restart the maker to finish installing.';
+    updateNow.textContent = 'Restart and install'; updateNow.classList.remove('hidden'); updateLater.classList.remove('hidden'); return;
+  }
+  if (channel === 'updater:error') {
+    updaterCard.classList.remove('hidden'); updaterTitle.textContent = 'Update check couldn’t finish';
+    updaterDetail.textContent = info.message || 'Try again later.'; updateNow.classList.add('hidden');
+    updateLater.classList.remove('hidden'); updateLater.textContent = 'Dismiss';
+  }
+});
+
+updateNow.addEventListener('click', async () => {
+  try {
+    if (availableUpdate?.manual) return await window.slCourse.openUpdateRelease(availableUpdate.releaseUrl);
+    if (updateNow.textContent.includes('Restart')) return await window.slCourse.installUpdate();
+    updateNow.disabled = true; updateNow.textContent = 'Starting…';
+    await window.slCourse.downloadUpdate();
+  } catch (error) {
+    updaterTitle.textContent = 'Update could not start'; updaterDetail.textContent = error.message || 'Try again later.';
+    updateNow.disabled = false; updateNow.textContent = 'Update now';
+  }
+});
+updateLater.addEventListener('click', () => updaterCard.classList.add('hidden'));
+window.slCourse.checkUpdates();

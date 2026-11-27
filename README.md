@@ -28,7 +28,15 @@ Open the replacement screen during development:
     npm run dist:win
     npm run dist:mac
 
-The GitHub Actions release workflow builds Windows and macOS installers and attaches them to each version-tag release. It embeds both runtime shell templates in the maker packages.
+The GitHub Actions release workflow builds Windows and macOS installers and attaches them to each version-tag release. It embeds both runtime shell templates in the maker packages, plus updater metadata for the Windows maker. The public repository contains the app source and release downloads.
+
+## Program updates
+
+The packaged maker checks the public GitHub release feed on launch. No account sign-in is required.
+
+When an update is available, choose **Update now** or **Next launch**. Windows downloads the update and offers to restart and install it. macOS checks the release feed and opens the release page; installation remains manual until the app is Developer ID signed and notarized. Exported course wrappers do not check for maker updates; their `--oobe` flow remains for replacing course content.
+
+Release builds include `latest.yml` and blockmaps alongside Windows installer assets for electron-updater. Because this repository and its releases are public, these files contain no private course content or credentials.
 
 ## Technical notes
 
