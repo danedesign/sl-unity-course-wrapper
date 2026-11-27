@@ -1,6 +1,6 @@
 {
   "name": "sl-unity-course-wrapper",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A cross-platform Stacked Learning shell for one Unity WebGL course",
   "main": "src/main.cjs",
   "author": "Stacked Learning",
@@ -9,8 +9,8 @@
     "start": "electron .",
     "start:oobe": "electron . --oobe",
     "dist": "electron-builder --publish never",
-    "dist:win": "electron-builder --win nsis zip --x64",
-    "dist:mac": "electron-builder --mac dmg zip --x64 --arm64"
+    "dist:win": "electron-builder --win nsis zip --x64 --publish never",
+    "dist:mac": "electron-builder --mac dmg zip --x64 --arm64 --publish never"
   },
   "dependencies": {
     "extract-zip": "^2.0.1"
