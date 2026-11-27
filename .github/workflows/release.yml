@@ -23,11 +23,17 @@ jobs:
         run: New-Item -ItemType Directory -Force build/templates | Out-Null
       - run: npx electron-builder --dir --win --x64 --publish never
       - shell: pwsh
-        run: Compress-Archive -Path dist/win-unpacked/* -DestinationPath build/templates/windows.zip -CompressionLevel Optimal
+        run: |
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath build/templates/windows.zip -CompressionLevel Optimal
+          $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          & $compiler /nologo /target:winexe /out:build/templates/windows-launcher.exe /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll /reference:System.Windows.Forms.dll .\build\launcher\SLWrapperLauncher.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-shell
-          path: build/templates/windows.zip
+          path: |
+            build/templates/windows.zip
+            build/templates/windows-launcher.exe
           if-no-files-found: error
 
   prepare-macos-shell:

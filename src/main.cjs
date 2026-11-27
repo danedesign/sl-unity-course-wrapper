@@ -190,14 +190,11 @@ async function getRuntimeRelease() {
   return runtimeReleasePromise;
 }
 
-async function ensureRuntime(target) {
-  const assetName = target === 'windows'
-    ? 'windows.zip'
-    : 'macos-universal.zip';
-  sendExportProgress(`Checking ${target === 'windows' ? 'Windows' : 'macOS'} runtime…`);
+async function ensureReleaseAsset(assetName, label) {
+  sendExportProgress(`Checking ${label}…`);
   const release = await getRuntimeRelease();
   const asset = release.assets?.find(item => item.name === assetName);
-  if (!asset?.browser_download_url) throw new Error(`The ${target} runtime is missing from release ${release.tag_name || app.getVersion()}.`);
+  if (!asset?.browser_download_url) throw new Error(`The ${assetName} asset is missing from release ${release.tag_name || app.getVersion()}.`);
   const cacheDir = path.join(app.getPath('userData'), 'runtime-cache', `v${app.getVersion()}`);
   const cached = path.join(cacheDir, assetName);
   const expected = String(asset.digest || '').replace(/^sha256:/i, '').toLowerCase();
@@ -212,7 +209,7 @@ async function ensureRuntime(target) {
   await fsp.mkdir(cacheDir, { recursive:true });
   const temp = `${cached}.download-${randomUUID()}`;
   await logExport(`Downloading runtime ${assetName} from ${asset.browser_download_url}`);
-  sendExportProgress(`Downloading ${target === 'windows' ? 'Windows' : 'macOS'} runtime…`);
+  sendExportProgress(`Downloading ${label}…`);
   const controller = new AbortController();
   let networkTimer;
   const resetNetworkTimer = () => {
@@ -234,7 +231,7 @@ async function ensureRuntime(target) {
     const percent = total ? Math.floor(received * 100 / total) : 0;
     if (percent !== lastPercent && (percent === 100 || percent % 2 === 0)) {
       lastPercent = percent;
-      sendExportProgress(`Downloading ${target === 'windows' ? 'Windows' : 'macOS'} runtime · ${percent}%`);
+      sendExportProgress(`Downloading ${label} · ${percent}%`);
     }
     callback(null, chunk);
   } });
@@ -252,10 +249,44 @@ async function ensureRuntime(target) {
   } finally { clearTimeout(networkTimer); }
 }
 
+async function ensureRuntime(target) {
+  return ensureReleaseAsset(target === 'windows' ? 'windows.zip' : 'macos-universal.zip', `${target === 'windows' ? 'Windows' : 'macOS'} runtime`);
+}
+
 async function hashFile(file) {
   const hash = createHash('sha256');
   for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
   return hash.digest('hex');
+}
+
+async function packSelfExtractingExe(launcherPath, payloadPath, outputPath) {
+  const launcherSize = (await fsp.stat(launcherPath)).size;
+  const payloadSize = (await fsp.stat(payloadPath)).size;
+  const payloadHash = Buffer.from(await hashFile(payloadPath), 'hex');
+  const trailer = Buffer.alloc(56);
+  trailer.write('SLWRAP01', 0, 'ascii');
+  trailer.writeBigInt64LE(BigInt(launcherSize), 8);
+  trailer.writeBigInt64LE(BigInt(payloadSize), 16);
+  payloadHash.copy(trailer, 24);
+  const output = fs.createWriteStream(outputPath, { flags:'wx' });
+  const append = async file => {
+    for await (const chunk of fs.createReadStream(file)) {
+      if (!output.write(chunk)) await new Promise(resolve => output.once('drain', resolve));
+    }
+  };
+  try {
+    await append(launcherPath);
+    await append(payloadPath);
+    await new Promise((resolve, reject) => output.write(trailer, error => error ? reject(error) : resolve()));
+    const finished = new Promise((resolve, reject) => { output.once('finish', resolve); output.once('error', reject); });
+    output.end();
+    await finished;
+    await logExport(`Packed self-extracting Windows EXE: ${outputPath}; launcher=${launcherSize}; payload=${payloadSize}; SHA-256=${payloadHash.toString('hex')}`);
+  } catch (error) {
+    output.destroy();
+    await fsp.rm(outputPath, { force:true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function extractRuntime(archive, destination, target) {
@@ -314,7 +345,7 @@ async function directoryBytes(root) {
   return total;
 }
 
-async function addCourseTreeToZip(zip, sourceRoot, archiveRoot, progress) {
+async function addCourseTreeToZip(zip, sourceRoot, archiveRoot, progress, label = 'Mac app') {
   const entries = await fsp.readdir(sourceRoot, { withFileTypes:true });
   for (const entry of entries) {
     const file = path.join(sourceRoot, entry.name);
@@ -322,7 +353,7 @@ async function addCourseTreeToZip(zip, sourceRoot, archiveRoot, progress) {
     const stat = await fsp.lstat(file);
     if (entry.isDirectory()) {
       zip.addEmptyDirectory(`${archiveName}/`, { mtime:stat.mtime, mode:stat.mode });
-      await addCourseTreeToZip(zip, file, archiveName, progress);
+      await addCourseTreeToZip(zip, file, archiveName, progress, label);
     } else if (entry.isSymbolicLink()) {
       const real = await fsp.realpath(file);
       if (real !== progress.root && !real.startsWith(progress.root + path.sep)) throw new Error(`Course link points outside the build folder: ${file}`);
@@ -337,7 +368,7 @@ async function addCourseTreeToZip(zip, sourceRoot, archiveRoot, progress) {
           const percent = progress.total ? Math.floor(progress.bytes * 100 / progress.total) : 100;
           if (percent >= progress.lastPercent + 1 || percent === 100) {
             progress.lastPercent = percent;
-            sendExportProgress(`Embedding course in Mac app · ${percent}% · ${entry.name}`);
+            sendExportProgress(`Embedding course in ${label} · ${percent}% · ${entry.name}`);
           }
           next(null, chunk);
         } });
@@ -348,7 +379,8 @@ async function addCourseTreeToZip(zip, sourceRoot, archiveRoot, progress) {
   }
 }
 
-async function embedCourseInMacArchive(shellArchive, outputArchive, courseRoot, metadata) {
+async function injectCourseIntoArchive(shellArchive, outputArchive, courseRoot, metadata, options) {
+  const { expectedEntry, resourceRoot, label } = options;
   const yauzl = require('yauzl');
   const yazl = require('yazl');
   const summary = await new Promise((resolve, reject) => {
@@ -396,7 +428,7 @@ async function embedCourseInMacArchive(shellArchive, outputArchive, courseRoot, 
           const type = mode & 0o170000;
           const isDirectory = name.endsWith('/') || type === 0o040000;
           const entryMode = mode || (isDirectory ? 0o40755 : 0o100644);
-          if (name.endsWith('SL Course Wrapper.app/Contents/Info.plist')) appInfoFound = true;
+          if (name === expectedEntry) appInfoFound = true;
           count++;
           if (isDirectory) {
             try { zip.addEmptyDirectory(name, { mtime:zipDate(entry), mode:entryMode }); sourceZip.readEntry(); }
@@ -423,12 +455,11 @@ async function embedCourseInMacArchive(shellArchive, outputArchive, courseRoot, 
           });
         });
         sourceZip.once('end', async () => {
-          if (!appInfoFound) return fail(new Error('The macOS runtime ZIP does not contain the expected app bundle.'));
+          if (!appInfoFound) return fail(new Error(`The ${label} runtime ZIP does not contain the expected app files.`));
           try {
-            const appRoot = 'SL Course Wrapper.app/Contents/Resources';
-            await addCourseTreeToZip(zip, courseRoot, `${appRoot}/course`, progress);
-            zip.addBuffer(metadataBuffer, `${appRoot}/course.json`, { mtime:new Date(), mode:0o100644, compressionLevel:1 });
-            sendExportProgress('Finishing the Mac app archive…');
+            await addCourseTreeToZip(zip, courseRoot, `${resourceRoot}/course`, progress, label);
+            zip.addBuffer(metadataBuffer, `${resourceRoot}/course.json`, { mtime:new Date(), mode:0o100644, compressionLevel:1 });
+            sendExportProgress(`Finishing ${label} archive…`);
             zip.end();
           } catch (cause) { fail(cause); }
         });
@@ -436,7 +467,7 @@ async function embedCourseInMacArchive(shellArchive, outputArchive, courseRoot, 
       });
     });
     await fsp.rename(temporary, outputArchive);
-    await logExport(`Created Mac app archive with embedded course: ${outputArchive}; source entries=${summary.count}`);
+    await logExport(`Created ${label} archive with embedded course: ${outputArchive}; source entries=${summary.count}`);
   } catch (error) {
     await fsp.rm(temporary, { force:true }).catch(() => {});
     throw error;
@@ -492,6 +523,7 @@ async function exportWrapper(targets) {
   const selected = [...new Set(Array.isArray(targets) ? targets : [])];
   if (!selected.length || selected.some(item => !['windows', 'macos'].includes(item))) throw new Error('Choose Windows, macOS, or both.');
   for (const target of selected) await ensureRuntime(target);
+  if (selected.includes('windows')) await ensureReleaseAsset('windows-launcher.exe', 'Windows self-extracting launcher');
   const output = await dialog.showOpenDialog(mainWindow, { title:'Choose the parent folder for your wrapper', properties:['openDirectory','createDirectory'] });
   if (output.canceled || !output.filePaths[0]) return null;
   const parent = output.filePaths[0];
@@ -505,28 +537,34 @@ async function exportWrapper(targets) {
     const { sourcePath: _sourcePath, ...exportMeta } = courseMeta;
     const wrapperMeta = { ...exportMeta, wrapperId:randomUUID() };
     await logExport(`Export started: ${folderName}; targets=${selected.join(',')}; source=${APP_DIR}; destination=${destination}`);
-    if (selected.includes('windows')) {
-      sendExportProgress('Copying WebGL build for Windows…');
-      await copyTree(APP_DIR, path.join(destination, 'course'));
-      await fsp.writeFile(path.join(destination, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
-    }
     for (const target of selected) {
       stage = `preparing the ${target === 'windows' ? 'Windows' : 'macOS'} runtime`;
       sendExportProgress(`${stage[0].toUpperCase()}${stage.slice(1)}…`);
-      const targetDir = path.join(destination, target === 'windows' ? 'Windows' : 'macOS');
+      const targetDir = path.join(destination, target === 'windows' && selected.includes('macos') ? 'Windows' : target === 'windows' ? '' : 'macOS');
       await fsp.mkdir(targetDir, { recursive:true });
       const assetName = target === 'windows' ? 'windows.zip' : 'macos-universal.zip';
       const runtime = path.join(app.getPath('userData'), 'runtime-cache', `v${app.getVersion()}`, assetName);
-      if (target === 'macos' && process.platform === 'win32') {
-        await embedCourseInMacArchive(runtime, path.join(targetDir, 'SL Course Wrapper.app.zip'), APP_DIR, wrapperMeta);
+      if (target === 'windows') {
+        stage = 'packing the self-extracting Windows app';
+        const payload = path.join(destination, `.windows-payload-${randomUUID()}.zip`);
+        try {
+          await injectCourseIntoArchive(runtime, payload, APP_DIR, wrapperMeta, {
+            expectedEntry:'SL Course Wrapper.exe', resourceRoot:'resources', label:'Windows app'
+          });
+          const launcher = path.join(app.getPath('userData'), 'runtime-cache', `v${app.getVersion()}`, 'windows-launcher.exe');
+          await packSelfExtractingExe(launcher, payload, path.join(targetDir, 'SL Course Wrapper.exe'));
+        } finally { await fsp.rm(payload, { force:true }).catch(() => {}); }
+      } else if (process.platform === 'win32') {
+        await injectCourseIntoArchive(runtime, path.join(targetDir, 'SL Course Wrapper.app.zip'), APP_DIR, wrapperMeta, {
+          expectedEntry:'SL Course Wrapper.app/Contents/Info.plist',
+          resourceRoot:'SL Course Wrapper.app/Contents/Resources', label:'Mac app'
+        });
       } else {
-        await extractRuntime(runtime, targetDir, target === 'windows' ? 'Windows' : 'macOS');
-        if (target === 'macos') {
-          const resourcesDir = path.join(targetDir, 'SL Course Wrapper.app', 'Contents', 'Resources');
-          sendExportProgress('Embedding WebGL build inside the Mac app…');
-          await copyTree(APP_DIR, path.join(resourcesDir, 'course'));
-          await fsp.writeFile(path.join(resourcesDir, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
-        }
+        await extractRuntime(runtime, targetDir, 'macOS');
+        const resourcesDir = path.join(targetDir, 'SL Course Wrapper.app', 'Contents', 'Resources');
+        sendExportProgress('Embedding WebGL build inside the Mac app…');
+        await copyTree(APP_DIR, path.join(resourcesDir, 'course'));
+        await fsp.writeFile(path.join(resourcesDir, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
       }
       const expectedShell = target === 'windows'
         ? path.join(targetDir, 'SL Course Wrapper.exe')
@@ -538,12 +576,12 @@ async function exportWrapper(targets) {
     stage = 'finishing the wrapper';
     sendExportProgress('Finishing wrapper…');
     const directions = selected.map(target => target === 'windows'
-      ? 'Windows: open Windows and run SL Course Wrapper.exe. Course files are in the course folder at the wrapper root.'
+      ? 'Windows: open Windows and run SL Course Wrapper.exe. It extracts the embedded app and course into your temporary files and launches the course.'
       : process.platform === 'win32'
         ? 'macOS: extract SL Course Wrapper.app.zip into the macOS folder, then open SL Course Wrapper.app. The course is embedded in the app.'
         : 'macOS: open the macOS folder and run SL Course Wrapper.app. The course is embedded in the app.');
-    const readme = [courseMeta.name, '', 'Launch the app in the folder for your operating system:', ...directions, '', selected.includes('windows') ? 'The Windows app reads the course folder at the wrapper root; the macOS app embeds the course inside its app bundle.' : 'The WebGL course is embedded inside the macOS app bundle.', 'Pass --oobe to the app to replace the build.'];
-    await fsp.writeFile(path.join(destination, 'READ-ME-FIRST.txt'), readme.join('\n'), 'utf8');
+    const readme = [courseMeta.name, '', 'Launch the app in the folder for your operating system:', ...directions, '', selected.includes('windows') ? 'Both platform apps contain the WebGL course. The Windows executable reuses its extracted temporary copy on later launches.' : 'The WebGL course is embedded inside the macOS app bundle.', 'Pass --oobe to the app to replace the build.'];
+    if (selected.includes('macos')) await fsp.writeFile(path.join(destination, 'READ-ME-FIRST.txt'), readme.join('\n'), 'utf8');
     await logExport(`Export completed: ${destination}`);
     return { path:destination, targets:selected, name:courseMeta.name };
   } catch (error) {

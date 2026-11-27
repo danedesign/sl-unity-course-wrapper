@@ -1,6 +1,6 @@
 {
   "name": "sl-unity-course-wrapper",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "A cross-platform Stacked Learning shell for one Unity WebGL course",
   "main": "src/main.cjs",
   "author": "Stacked Learning",

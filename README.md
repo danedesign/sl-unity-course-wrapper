@@ -7,7 +7,7 @@ Cross-platform Electron maker for exporting a Unity WebGL course into Windows, m
 - Import a Unity WebGL build folder or ZIP. It must contain index.html and Unity's Build output; a ZIP may have one enclosing folder.
 - The maker suggests a course name from Unity's loader productName or HTML title. Edit the name before export.
 - Launch course previews the imported course.
-- Build wrapper lets you choose Windows, macOS, or both, then select a parent folder. It creates a course-named output with each selected app. The Mac course is embedded inside the `.app`; Windows reads a `course` folder at the wrapper root.
+- Build wrapper lets you choose Windows, macOS, or both, then select a parent folder. A Windows-only export is one self-extracting `.exe` containing the Windows app and course. On first launch it extracts to a hash-named folder under the user's temporary directory and starts the course; later launches reuse that extracted copy. A combined export places the Windows `.exe` in `Windows/`. The Mac course is embedded inside the `.app`.
 - The generated app launches the embedded course immediately. Pass --oobe to reopen the import screen and replace that wrapper's course.
 - The maker always opens its import/export screen; only an exported course wrapper launches a course automatically. Development runs use separate app data so they cannot intercept the installed maker.
 
@@ -43,7 +43,7 @@ Release builds include `latest.yml` and blockmaps alongside Windows installer as
 
 ## Export and diagnostics
 
-Folder imports use the source in place, avoiding an extra copy inside the maker. ZIP imports are unpacked into the maker's local course cache. Export reports file-level progress while copying Windows course files or embedding the course into the Mac app. Export logs are written to the maker's user data directory under `logs/export.log`.
+Folder imports use the source in place, avoiding an extra copy inside the maker. ZIP imports are unpacked into the maker's local course cache. Export reports file-level progress while embedding the course into platform archives and packing the Windows self-extracting executable. Export logs are written to the maker's user data directory under `logs/export.log`.
 
 ## Technical notes
 
