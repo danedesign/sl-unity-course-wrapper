@@ -1,6 +1,6 @@
 {
   "name": "sl-unity-course-wrapper",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A cross-platform Stacked Learning shell for one Unity WebGL course",
   "main": "src/main.cjs",
   "author": "Stacked Learning",
@@ -28,15 +28,6 @@
       "src/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "build/templates",
-        "to": "templates",
-        "filter": [
-          "*.zip"
-        ]
-      }
-    ],
     "directories": {
       "output": "dist"
     },
@@ -46,7 +37,11 @@
         "nsis",
         "zip"
       ],
-      "artifactName": "SL-Course-Wrapper-${version}-Windows.${ext}"
+      "artifactName": "SL-Course-Wrapper-${version}-Windows.${ext}",
+      "extraResources": [
+        { "from": "build/templates/windows.zip", "to": "templates/windows.zip" },
+        { "from": "build/templates/macos-universal-windows.zip", "to": "templates/macos-universal.zip" }
+      ]
     },
     "nsis": {
       "oneClick": true,
@@ -60,7 +55,11 @@
         "zip"
       ],
       "category": "public.app-category.education",
-      "artifactName": "SL-Course-Wrapper-${version}-${arch}-macOS.${ext}"
+      "artifactName": "SL-Course-Wrapper-${version}-${arch}-macOS.${ext}",
+      "extraResources": [
+        { "from": "build/templates/windows.zip", "to": "templates/windows.zip" },
+        { "from": "build/templates/macos-universal.zip", "to": "templates/macos-universal.zip" }
+      ]
     },
     "publish": [{
       "provider": "github",

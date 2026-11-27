@@ -46,7 +46,9 @@ $('export').addEventListener('click', async () => {
     if (!targets.length) throw new Error('Choose Windows, macOS, or both.');
     await window.slCourse.setName($('course-name').value);
     setBusy(true, 'Preparing your wrapper folder…');
-    const result = await window.slCourse.exportWrapper(targets);
+    const response = await window.slCourse.exportWrapper(targets);
+    if (!response?.ok) throw new Error(response?.error || 'The wrapper export did not complete.');
+    const result = response.wrapper;
     if (result) {
       showStatus(`Wrapper exported for ${result.targets.map(x => x === 'windows' ? 'Windows' : 'macOS').join(' and ')} to ${result.path}`, true);
       await window.slCourse.openFolder(result.path);
@@ -70,6 +72,7 @@ window.slCourse.status().then(async ({meta,oobe}) => {
 });
 window.slCourse.onDroppedImport(meta => { setBusy(false); render(meta); showStatus('Course imported. Set its display name, then launch it.', true); });
 window.slCourse.onDroppedError(message => { setBusy(false); showStatus(message || 'Could not import this build.'); });
+window.slCourse.onExportProgress(message => { $('busy-text').textContent = message; });
 const updaterCard = $('updater-card');
 const updaterTitle = $('updater-title');
 const updaterDetail = $('updater-detail');

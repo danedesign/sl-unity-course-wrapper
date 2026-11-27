@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('slCourse', {
   launch: () => ipcRenderer.invoke('course:launch'),
   platforms: () => ipcRenderer.invoke('course:platforms'),
   exportWrapper: (targets) => ipcRenderer.invoke('course:export', targets),
+  onExportProgress: (callback) => ipcRenderer.on('course:export-progress', (_event, message) => callback(message)),
   openFolder: (folder) => ipcRenderer.invoke('course:open-folder', folder),
   onDroppedImport: (callback) => ipcRenderer.on('course:imported', (_event, meta) => callback(meta)),
   onDroppedError: (callback) => ipcRenderer.on('course:import-error', (_event, message) => callback(message)),

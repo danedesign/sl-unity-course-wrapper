@@ -41,6 +41,10 @@ let busy = false;
 let programUpdater = null;
 let updaterCheckStarted = false;
 
+function sendExportProgress(message) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('course:export-progress', message);
+}
+
 function mimeFor(file) {
   const bare = file.replace(/\.(br|gz)$/i, '');
   const ext = path.extname(bare).toLowerCase();
@@ -175,15 +179,21 @@ async function exportWrapper(targets) {
   let suffix = 2;
   while (fs.existsSync(destination)) destination = path.join(parent, `${folderName} (${suffix++})`);
   await fsp.mkdir(destination, { recursive:true });
+  let stage = 'copying the course files';
   try {
     const wrapperMeta = { ...courseMeta, wrapperId:randomUUID() };
+    sendExportProgress('Copying course files…');
     await fsp.cp(APP_DIR, path.join(destination, 'course'), { recursive:true, dereference:false });
     await fsp.writeFile(path.join(destination, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
     for (const target of selected) {
+      stage = `preparing the ${target === 'windows' ? 'Windows' : 'macOS'} runtime`;
+      sendExportProgress(`${stage[0].toUpperCase()}${stage.slice(1)}…`);
       const targetDir = path.join(destination, target === 'windows' ? 'Windows' : 'macOS');
       await fsp.mkdir(targetDir, { recursive:true });
       await extractZip(templates[target], { dir:targetDir });
     }
+    stage = 'finishing the wrapper';
+    sendExportProgress('Finishing wrapper…');
     const directions = selected.map(target => target === 'windows'
       ? 'Windows: open the Windows folder and run SL Course Wrapper.exe.'
       : 'macOS: open the macOS folder and run SL Course Wrapper.app.');
@@ -192,7 +202,7 @@ async function exportWrapper(targets) {
     return { path:destination, targets:selected, name:courseMeta.name };
   } catch (error) {
     await fsp.rm(destination, { recursive:true, force:true }).catch(() => {});
-    throw error;
+    throw new Error(`Export failed while ${stage}: ${error?.message || String(error)}`);
   }
 }
 
@@ -319,7 +329,10 @@ ipcMain.handle('course:set-name', async (_event, name) => {
   return courseMeta;
 });
 ipcMain.handle('course:launch', showCourse);
-ipcMain.handle('course:export', (_event, targets) => exportWrapper(targets));
+ipcMain.handle('course:export', async (_event, targets) => {
+  try { return { ok:true, wrapper:await exportWrapper(targets) }; }
+  catch (error) { return { ok:false, error:error?.message || String(error) }; }
+});
 ipcMain.handle('course:open-folder', async (_event, dir) => {
   if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Invalid folder path.');
   return shell.openPath(dir);

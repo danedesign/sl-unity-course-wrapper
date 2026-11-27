@@ -47,10 +47,15 @@ jobs:
           APP_PATH="$(find dist -type d -name 'SL Course Wrapper.app' -print -quit)"
           test -n "$APP_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" build/templates/macos-universal.zip
+          mkdir -p build/macos-windows/SL-Course-Wrapper
+          cp -pRL "$APP_PATH" "build/macos-windows/SL-Course-Wrapper/SL Course Wrapper.app"
+          ditto -c -k --sequesterRsrc --keepParent "build/macos-windows/SL-Course-Wrapper/SL Course Wrapper.app" build/templates/macos-universal-windows.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-shell
-          path: build/templates/macos-universal.zip
+          name: macos-shells
+          path: |
+            build/templates/macos-universal.zip
+            build/templates/macos-universal-windows.zip
           if-no-files-found: error
 
   build-windows-maker:
@@ -68,7 +73,7 @@ jobs:
           path: build/templates
       - uses: actions/download-artifact@v4
         with:
-          name: macos-shell
+          name: macos-shells
           path: build/templates
       - run: npm ci
       - run: npm run dist:win
@@ -97,7 +102,7 @@ jobs:
           path: build/templates
       - uses: actions/download-artifact@v4
         with:
-          name: macos-shell
+          name: macos-shells
           path: build/templates
       - run: npm ci
       - run: npm run dist:mac
