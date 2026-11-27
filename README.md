@@ -11,7 +11,7 @@ Cross-platform Electron maker for exporting a Unity WebGL course into Windows, m
 - The generated app launches the embedded course immediately. Pass --oobe to reopen the import screen and replace that wrapper's course.
 - The maker always opens its import/export screen; only an exported course wrapper launches a course automatically. Development runs use separate app data so they cannot intercept the installed maker.
 
-The maker installers include Windows and universal macOS shell templates. The exported macOS app runs on Intel and Apple Silicon. GitHub Actions builds each shell and maker installer on the corresponding OS runner.
+The maker installer is lightweight and does not bundle either native shell. When you export, it downloads only the selected Windows and/or universal macOS shell from that version's public GitHub release, checks its SHA-256, and caches it locally for later builds. Both maker editions can create either target. The macOS runtime is universal for Intel and Apple Silicon. When a Windows maker creates a macOS target, it keeps the symlink-preserving app ZIP intact; extract that ZIP into the generated `macOS` folder on a Mac before launching it.
 
 ## Run from source
 
@@ -29,7 +29,9 @@ Open the replacement screen during development:
     npm run dist:win
     npm run dist:mac
 
-The GitHub Actions release workflow builds Windows and macOS installers and attaches them to each version-tag release. It embeds both runtime shell templates in the maker packages, plus updater metadata for the Windows maker. The public repository contains the app source and release downloads.
+The GitHub Actions release workflow builds Windows and macOS installers and attaches the native runtime archives to each version-tag release. The maker packages contain only the UI and export tools; runtime archives download on demand. The public repository contains the app source and release downloads.
+
+After each release build, keep a local copy of the Windows installer under `dist/releases/<version>/`. Keep the version in the folder name and retain the original release filename so it is easy to locate and reuse without rebuilding.
 
 ## Program updates
 
@@ -38,6 +40,12 @@ The packaged maker checks the public GitHub release feed on launch. No account s
 When an update is available, choose **Update now** or **Next launch**. Windows downloads the update and offers to restart and install it. macOS checks the release feed and opens the release page; installation remains manual until the app is Developer ID signed and notarized. Exported course wrappers do not check for maker updates; their `--oobe` flow remains for replacing course content.
 
 Release builds include `latest.yml` and blockmaps alongside Windows installer assets for electron-updater. Because this repository and its releases are public, these files contain no private course content or credentials.
+
+## Export and diagnostics
+
+Folder imports use the source in place, avoiding an extra copy inside the maker. ZIP imports are unpacked into the maker's local course cache. Export copies the WebGL build once into the output and then extracts each selected app shell, reporting file-level progress. Export logs are written to the maker's user data directory under `logs/export.log`.
+
+The Windows installer for each release is also cached in `dist/releases/<version>/` in the development checkout.
 
 ## Technical notes
 

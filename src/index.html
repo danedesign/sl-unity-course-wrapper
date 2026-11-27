@@ -11,7 +11,7 @@
     <section class="hero">
       <div class="eyebrow">A ready-to-run course shell</div>
       <h1 id="headline">Welcome.<br><em>Let’s add your course.</em></h1>
-      <p id="description">Choose a Unity WebGL build folder or ZIP. We’ll detect its course name, keep it with this wrapper, and launch it for the next learner.</p>
+      <p id="description">Select a Unity WebGL folder or ZIP, choose Windows, macOS, or both, and export. Only the selected app shells download, and they stay cached for your next build.</p>
       <div class="steps"><span class="active"><b>1</b> Add build</span><span><b>2</b> Name course</span><span><b>3</b> Export wrapper</span></div>
     </section>
     <section class="workspace">
@@ -23,14 +23,14 @@
         <div class="course-icon">WEB<br>GL</div><div class="course-info"><small>IMPORTED COURSE</small><strong id="detected-name">Course name</strong><span id="source-title"></span></div><span class="badge"><i></i> Ready</span>
       </div>
       <div class="name-row hidden" id="name-row"><label for="course-name">Course title</label><input id="course-name" maxlength="100" autocomplete="off"><button class="secondary" id="save-name">Save name</button></div>
-      <div class="export-row hidden" id="export-row"><div class="target-options"><small>BUILD FOR</small><label><input type="checkbox" id="target-win"> Windows</label><label><input type="checkbox" id="target-mac"> macOS</label><span>Choose either platform or both. Course files are stored once.</span></div><button class="primary" id="export">Export wrapper <span>↗</span></button></div>
-      <p class="platform-note hidden" id="platform-note">The exported folder contains a native app for each selected platform and one shared course folder.</p>
+      <div class="export-row hidden" id="export-row"><div class="target-options"><small>BUILD FOR</small><label><input type="checkbox" id="target-win"> Windows</label><label><input type="checkbox" id="target-mac"> macOS</label><span>Choose either platform or both. Runtime downloads are cached for future builds.</span></div><button class="primary" id="export">Build wrapper <span>↗</span></button></div>
+      <p class="platform-note hidden" id="platform-note">One shared WebGL course is copied beside the native app for each selected platform.</p>
       <section class="updater-card hidden" id="updater-card" aria-live="polite"><div><small>PROGRAM UPDATE</small><strong id="updater-title">Checking for updates…</strong><span id="updater-detail"></span></div><div class="updater-actions"><button class="secondary hidden" id="update-later">Next launch</button><button class="primary hidden" id="update-now">Update now</button></div></section>
       <div class="actions"><button class="text-button hidden" id="replace">Replace build</button><button class="primary launch hidden" id="launch">Launch course <span>→</span></button></div>
       <div class="status hidden" id="status" role="status"></div>
     </section>
     <footer><span class="logo-mark">▰</span> STACKED LEARNING <small>Continuously Building Knowledge</small></footer>
   </main>
-  <div class="veil hidden" id="veil"><div class="spinner"></div><strong id="busy-text">Preparing course…</strong><span>Large builds may take a moment to copy</span></div>
+  <div class="veil hidden" id="veil"><div class="spinner"></div><strong id="busy-text">Preparing course…</strong><span id="busy-detail">Progress updates appear here while files are copied or unpacked.</span></div>
   <script src="renderer.js"></script>
 </body></html>

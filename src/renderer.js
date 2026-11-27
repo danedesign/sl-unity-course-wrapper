@@ -5,7 +5,7 @@ const veil = $('veil');
 let currentMeta = null;
 
 function showStatus(message, ok = false) { statusBox.textContent = message; statusBox.classList.toggle('ok', ok); statusBox.classList.remove('hidden'); }
-function setBusy(active, text = 'Preparing course…') { veil.classList.toggle('hidden', !active); $('busy-text').textContent = text; $('choose').disabled = active; $('launch').disabled = active; $('export').disabled = active; }
+function setBusy(active, text = 'Preparing course…') { veil.classList.toggle('hidden', !active); $('busy-text').textContent = text; $('busy-detail').textContent = ''; $('choose').disabled = active; $('launch').disabled = active; $('export').disabled = active; }
 function render(meta) {
   currentMeta = meta;
   if (!meta) return;
@@ -64,15 +64,15 @@ window.slCourse.status().then(async ({meta,oobe}) => {
   const platforms = await window.slCourse.platforms();
   $('target-win').disabled = !platforms.windows;
   $('target-mac').disabled = !platforms.macos;
-  $('target-win').checked = platforms.windows;
-  $('target-mac').checked = platforms.macos;
+  $('target-win').checked = platforms.default === 'win32';
+  $('target-mac').checked = platforms.default === 'darwin';
   if (!platforms.windows || !platforms.macos) $('export').disabled = true;
   render(meta);
   if (oobe) showStatus(meta ? 'Select a replacement build to update this wrapper.' : 'Add a WebGL build to get started.', true);
 });
 window.slCourse.onDroppedImport(meta => { setBusy(false); render(meta); showStatus('Course imported. Set its display name, then launch it.', true); });
 window.slCourse.onDroppedError(message => { setBusy(false); showStatus(message || 'Could not import this build.'); });
-window.slCourse.onExportProgress(message => { $('busy-text').textContent = message; });
+window.slCourse.onExportProgress(message => { $('busy-text').textContent = message; $('busy-detail').textContent = 'The selected runtime is cached locally after its first download.'; });
 const updaterCard = $('updater-card');
 const updaterTitle = $('updater-title');
 const updaterDetail = $('updater-detail');

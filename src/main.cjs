@@ -3,7 +3,10 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
 const http = require('node:http');
-const { randomUUID } = require('node:crypto');
+const { spawn } = require('node:child_process');
+const { createHash, randomUUID } = require('node:crypto');
+const { pipeline } = require('node:stream/promises');
+const { Readable, Transform } = require('node:stream');
 const extractZip = require('extract-zip');
 const updateConfig = require('./update-config.cjs');
 
@@ -40,6 +43,14 @@ let courseMeta = null;
 let busy = false;
 let programUpdater = null;
 let updaterCheckStarted = false;
+let runtimeReleasePromise;
+const EXPORT_LOG = path.join(app.getPath('userData'), 'logs', 'export.log');
+
+async function logExport(message) {
+  const line = `${new Date().toISOString()} ${message}\n`;
+  await fsp.mkdir(path.dirname(EXPORT_LOG), { recursive:true }).catch(() => {});
+  await fsp.appendFile(EXPORT_LOG, line, 'utf8').catch(() => {});
+}
 
 function sendExportProgress(message) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('course:export-progress', message);
@@ -103,35 +114,37 @@ async function findIndex(root) {
 async function importCourse(sourcePath) {
   if (busy) throw new Error('An import is already in progress.');
   busy = true;
-  const tmp = path.join(app.getPath('userData'), `course-import-${Date.now()}`);
-  const backup = path.join(app.getPath('userData'), `course-backup-${Date.now()}`);
-  const staged = path.join(app.getPath('userData'), `course-ready-${Date.now()}`);
+  const importCache = path.join(app.getPath('userData'), 'imports');
+  const extracted = path.join(importCache, `${Date.now()}-${randomUUID()}`);
+  let keepExtracted = false;
+  const previousRoot = APP_DIR;
   try {
-    await fsp.mkdir(tmp, { recursive: true });
     const isZip = path.extname(sourcePath).toLowerCase() === '.zip';
-    if (isZip) await extractZip(sourcePath, { dir: tmp });
-    else await fsp.cp(sourcePath, tmp, { recursive: true, dereference: false, filter: (src) => !src.split(path.sep).some(part => part === '..') });
-    const root = await findIndex(tmp);
+    let root;
+    if (isZip) {
+      await fsp.mkdir(extracted, { recursive:true });
+      sendExportProgress('Opening WebGL ZIP…');
+      let entries = 0;
+      await extractZip(sourcePath, { dir:extracted, onEntry(entry) {
+        entries++;
+        if (entries % 10 === 0) sendExportProgress(`Unpacking WebGL files · ${entries} items · ${path.basename(entry.fileName)}`);
+      } });
+      root = await findIndex(extracted);
+      keepExtracted = true;
+    } else {
+      root = await findIndex(path.resolve(sourcePath));
+    }
     const meta = await readCourseMetadata(root);
-    await fsp.cp(root, staged, { recursive: true, dereference: false });
+    meta.sourcePath = root;
     if (courseWindow && !courseWindow.isDestroyed()) { courseWindow.close(); courseWindow = null; }
     if (server) { await new Promise(resolve => server.close(resolve)); server = null; }
-    let hadCourse = false;
-    try { await fsp.rename(USER_COURSE_DIR, backup); hadCourse = true; } catch (err) { if (err.code !== 'ENOENT') throw err; }
-    try {
-      await fsp.rename(staged, USER_COURSE_DIR);
-      await fsp.writeFile(USER_META_FILE, JSON.stringify(meta, null, 2), 'utf8');
-    } catch (err) {
-      await fsp.rm(USER_COURSE_DIR, { recursive: true, force: true });
-      if (hadCourse) await fsp.rename(backup, USER_COURSE_DIR);
-      throw err;
-    }
-    await fsp.rm(backup, { recursive: true, force: true });
-    APP_DIR = USER_COURSE_DIR; META_FILE = USER_META_FILE; courseMeta = meta;
+    await fsp.writeFile(USER_META_FILE, JSON.stringify(meta, null, 2), 'utf8');
+    APP_DIR = root; META_FILE = USER_META_FILE; courseMeta = meta;
+    const cachedPrefix = importCache + path.sep;
+    if (previousRoot.startsWith(cachedPrefix) && previousRoot !== root) await fsp.rm(previousRoot, { recursive:true, force:true }).catch(() => {});
     return meta;
   } finally {
-    await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
-    await fsp.rm(staged, { recursive: true, force: true }).catch(() => {});
+    if (!keepExtracted) await fsp.rm(extracted, { recursive:true, force:true }).catch(() => {});
     busy = false;
   }
 }
@@ -148,7 +161,8 @@ async function chooseCourse() {
 async function loadMetadata() {
   try {
     courseMeta = JSON.parse(await fsp.readFile(USER_META_FILE, 'utf8'));
-    APP_DIR = USER_COURSE_DIR; META_FILE = USER_META_FILE;
+    APP_DIR = courseMeta.sourcePath || USER_COURSE_DIR; META_FILE = USER_META_FILE;
+    if (!fs.existsSync(path.join(APP_DIR, 'index.html'))) throw new Error('The selected WebGL build folder is no longer available.');
     return courseMeta;
   } catch {}
   try {
@@ -164,13 +178,174 @@ function safeFolderName(name) {
   return (safe || 'SL-Course-Wrapper').slice(0, 100);
 }
 
+async function getRuntimeRelease() {
+  if (!runtimeReleasePromise) runtimeReleasePromise = (async () => {
+    const tag = `v${app.getVersion()}`;
+    const url = `https://api.github.com/repos/${updateConfig.githubOwner}/${updateConfig.githubRepo}/releases/tags/${tag}`;
+    const response = await fetch(url, { headers:{ Accept:'application/vnd.github+json', 'X-GitHub-Api-Version':'2022-11-28', 'User-Agent':'SL-Course-Wrapper-Maker' }, signal:AbortSignal.timeout(30_000) });
+    const release = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Could not find runtime files for ${tag} (${response.status}). Check the internet connection or install the latest maker.`);
+    return release;
+  })().catch(error => { runtimeReleasePromise = null; throw error; });
+  return runtimeReleasePromise;
+}
+
+async function ensureRuntime(target) {
+  const assetName = target === 'windows'
+    ? 'windows.zip'
+    : 'macos-universal.zip';
+  sendExportProgress(`Checking ${target === 'windows' ? 'Windows' : 'macOS'} runtime…`);
+  const release = await getRuntimeRelease();
+  const asset = release.assets?.find(item => item.name === assetName);
+  if (!asset?.browser_download_url) throw new Error(`The ${target} runtime is missing from release ${release.tag_name || app.getVersion()}.`);
+  const cacheDir = path.join(app.getPath('userData'), 'runtime-cache', `v${app.getVersion()}`);
+  const cached = path.join(cacheDir, assetName);
+  const expected = String(asset.digest || '').replace(/^sha256:/i, '').toLowerCase();
+  if (fs.existsSync(cached)) {
+    const digest = (await fsp.stat(cached)).size;
+    if ((!asset.size || digest === Number(asset.size)) && (!expected || (await hashFile(cached)) === expected)) {
+      await logExport(`Runtime cache hit: ${assetName} (${digest} bytes)`);
+      return cached;
+    }
+    await fsp.rm(cached, { force:true });
+  }
+  await fsp.mkdir(cacheDir, { recursive:true });
+  const temp = `${cached}.download-${randomUUID()}`;
+  await logExport(`Downloading runtime ${assetName} from ${asset.browser_download_url}`);
+  sendExportProgress(`Downloading ${target === 'windows' ? 'Windows' : 'macOS'} runtime…`);
+  const controller = new AbortController();
+  let networkTimer;
+  const resetNetworkTimer = () => {
+    clearTimeout(networkTimer);
+    networkTimer = setTimeout(() => controller.abort(), 120_000);
+  };
+  resetNetworkTimer();
+  let response;
+  try { response = await fetch(asset.browser_download_url, { redirect:'follow', signal:controller.signal }); }
+  catch (error) { clearTimeout(networkTimer); throw error; }
+  if (!response.ok || !response.body) { clearTimeout(networkTimer); throw new Error(`Runtime download failed (${response.status}).`); }
+  const total = Number(response.headers.get('content-length')) || Number(asset.size) || 0;
+  const hash = createHash('sha256');
+  let received = 0;
+  let lastPercent = -1;
+  const meter = new Transform({ transform(chunk, _encoding, callback) {
+    resetNetworkTimer();
+    received += chunk.length; hash.update(chunk);
+    const percent = total ? Math.floor(received * 100 / total) : 0;
+    if (percent !== lastPercent && (percent === 100 || percent % 2 === 0)) {
+      lastPercent = percent;
+      sendExportProgress(`Downloading ${target === 'windows' ? 'Windows' : 'macOS'} runtime · ${percent}%`);
+    }
+    callback(null, chunk);
+  } });
+  try {
+    await pipeline(Readable.fromWeb(response.body), meter, fs.createWriteStream(temp));
+    const actual = hash.digest('hex');
+    if (asset.size && received !== Number(asset.size)) throw new Error(`Runtime download size check failed for ${assetName}.`);
+    if (expected && actual !== expected) throw new Error(`Runtime checksum failed for ${assetName}.`);
+    await fsp.rename(temp, cached);
+    await logExport(`Runtime downloaded and verified: ${assetName} (${received} bytes, SHA-256 ${actual})`);
+    return cached;
+  } catch (error) {
+    await fsp.rm(temp, { force:true }).catch(() => {});
+    throw error;
+  } finally { clearTimeout(networkTimer); }
+}
+
+async function hashFile(file) {
+  const hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+async function extractRuntime(archive, destination, target) {
+  const command = process.platform === 'win32' ? 'tar.exe' : '/usr/bin/tar';
+  await logExport(`Extracting ${target} runtime with ${command}: ${archive}`);
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, ['-xvf', archive, '-C', destination], { windowsHide:true });
+    let output = '';
+    let count = 0;
+    let timedOut = false;
+    let idleTimer;
+    const resetIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { timedOut = true; child.kill(); }, 5 * 60_000);
+    };
+    resetIdleTimer();
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      resetIdleTimer();
+      output += chunk;
+      const lines = output.split(/\r?\n/); output = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        count++;
+        if (count % 5 === 0) sendExportProgress(`Preparing ${target} runtime · ${count} files · ${path.basename(line.trim())}`);
+      }
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { resetIdleTimer(); logExport(`tar: ${chunk.trim()}`); });
+    child.on('error', error => { clearTimeout(idleTimer); reject(error); });
+    child.on('close', code => {
+      clearTimeout(idleTimer);
+      if (code === 0) {
+        sendExportProgress(`Prepared ${target} runtime · ${count} files`);
+        logExport(`Extracted ${target} runtime (${count} entries)`);
+        resolve();
+      } else reject(new Error(timedOut ? 'Runtime extraction stopped making progress for five minutes.' : `System ZIP extractor exited with code ${code}.`));
+    });
+  });
+}
+
+async function copyTree(source, destination) {
+  const sourceReal = await fsp.realpath(source);
+  const measure = async dir => {
+    let total = 0;
+    for (const entry of await fsp.readdir(dir, { withFileTypes:true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) total += await measure(p);
+      else total += (await fsp.stat(p)).size;
+    }
+    return total;
+  };
+  const progress = { bytes:0, total:await measure(sourceReal), lastPercent:-1 };
+  const walk = async (from, to) => {
+    const entries = await fsp.readdir(from, { withFileTypes:true });
+    await fsp.mkdir(to, { recursive:true });
+    for (const entry of entries) {
+      const fromPath = path.join(from, entry.name);
+      const toPath = path.join(to, entry.name);
+      if (entry.isDirectory()) { await walk(fromPath, toPath); continue; }
+      const stat = await fsp.stat(fromPath);
+      if (entry.isSymbolicLink()) {
+        const real = await fsp.realpath(fromPath);
+        if (real !== sourceReal && !real.startsWith(sourceReal + path.sep)) throw new Error(`Course link points outside the build folder: ${fromPath}`);
+        if (stat.isDirectory()) { await walk(real, toPath); continue; }
+      }
+      await new Promise((resolve, reject) => {
+        const stream = new Transform({ transform(chunk, _encoding, callback) {
+          progress.bytes += chunk.length;
+          const percent = progress.total ? Math.floor(progress.bytes * 100 / progress.total) : 100;
+          if (percent !== progress.lastPercent) {
+            progress.lastPercent = percent;
+            sendExportProgress(`Copying WebGL build · ${percent}% · ${entry.name}`);
+          }
+          callback(null, chunk);
+        } });
+        pipeline(fs.createReadStream(fromPath), stream, fs.createWriteStream(toPath)).then(resolve, reject);
+      });
+      await fsp.utimes(toPath, stat.atime, stat.mtime).catch(() => {});
+    }
+  };
+  await walk(sourceReal, destination);
+}
+
 async function exportWrapper(targets) {
   if (!courseMeta) throw new Error('Import a course before exporting a wrapper.');
   if (!app.isPackaged) throw new Error('Export is available in the installed maker app. Package the maker first, then import and export from that app.');
   const selected = [...new Set(Array.isArray(targets) ? targets : [])];
   if (!selected.length || selected.some(item => !['windows', 'macos'].includes(item))) throw new Error('Choose Windows, macOS, or both.');
-  const templates = { windows:path.join(process.resourcesPath,'templates','windows.zip'), macos:path.join(process.resourcesPath,'templates','macos-universal.zip') };
-  for (const target of selected) if (!fs.existsSync(templates[target])) throw new Error(`The ${target === 'windows' ? 'Windows' : 'macOS'} runtime template is missing. Reinstall the latest maker release.`);
+  for (const target of selected) await ensureRuntime(target);
   const output = await dialog.showOpenDialog(mainWindow, { title:'Choose the parent folder for your wrapper', properties:['openDirectory','createDirectory'] });
   if (output.canceled || !output.filePaths[0]) return null;
   const parent = output.filePaths[0];
@@ -179,28 +354,46 @@ async function exportWrapper(targets) {
   let suffix = 2;
   while (fs.existsSync(destination)) destination = path.join(parent, `${folderName} (${suffix++})`);
   await fsp.mkdir(destination, { recursive:true });
-  let stage = 'copying the course files';
+  let stage = 'copying the WebGL build';
   try {
     const wrapperMeta = { ...courseMeta, wrapperId:randomUUID() };
-    sendExportProgress('Copying course files…');
-    await fsp.cp(APP_DIR, path.join(destination, 'course'), { recursive:true, dereference:false });
+    await logExport(`Export started: ${folderName}; targets=${selected.join(',')}; source=${APP_DIR}; destination=${destination}`);
+    sendExportProgress('Copying WebGL build…');
+    await copyTree(APP_DIR, path.join(destination, 'course'));
     await fsp.writeFile(path.join(destination, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
     for (const target of selected) {
       stage = `preparing the ${target === 'windows' ? 'Windows' : 'macOS'} runtime`;
       sendExportProgress(`${stage[0].toUpperCase()}${stage.slice(1)}…`);
       const targetDir = path.join(destination, target === 'windows' ? 'Windows' : 'macOS');
       await fsp.mkdir(targetDir, { recursive:true });
-      await extractZip(templates[target], { dir:targetDir });
+      const assetName = target === 'windows' ? 'windows.zip' : 'macos-universal.zip';
+      const runtime = path.join(app.getPath('userData'), 'runtime-cache', `v${app.getVersion()}`, assetName);
+      if (target === 'macos' && process.platform === 'win32') {
+        sendExportProgress('Keeping the macOS app ZIP intact for extraction on a Mac…');
+        await fsp.copyFile(runtime, path.join(targetDir, 'SL Course Wrapper.app.zip'));
+      } else {
+        await extractRuntime(runtime, targetDir, target === 'windows' ? 'Windows' : 'macOS');
+      }
+      const expectedShell = target === 'windows'
+        ? path.join(targetDir, 'SL Course Wrapper.exe')
+        : process.platform === 'win32'
+          ? path.join(targetDir, 'SL Course Wrapper.app.zip')
+          : path.join(targetDir, 'SL Course Wrapper.app', 'Contents', 'Info.plist');
+      if (!fs.existsSync(expectedShell)) throw new Error(`The ${target === 'windows' ? 'Windows' : 'macOS'} runtime archive did not contain the expected app files.`);
     }
     stage = 'finishing the wrapper';
     sendExportProgress('Finishing wrapper…');
     const directions = selected.map(target => target === 'windows'
       ? 'Windows: open the Windows folder and run SL Course Wrapper.exe.'
-      : 'macOS: open the macOS folder and run SL Course Wrapper.app.');
+      : process.platform === 'win32'
+        ? 'macOS: extract SL Course Wrapper.app.zip into the macOS folder, then open SL Course Wrapper.app.'
+        : 'macOS: open the macOS folder and run SL Course Wrapper.app.');
     const readme = [courseMeta.name, '', 'Launch the app in the folder for your operating system:', ...directions, '', 'Course files are shared in the course folder.', 'Pass --oobe to the app to replace the build.'];
     await fsp.writeFile(path.join(destination, 'READ-ME-FIRST.txt'), readme.join('\n'), 'utf8');
+    await logExport(`Export completed: ${destination}`);
     return { path:destination, targets:selected, name:courseMeta.name };
   } catch (error) {
+    await logExport(`Export failed while ${stage}: ${error?.stack || error}`);
     await fsp.rm(destination, { recursive:true, force:true }).catch(() => {});
     throw new Error(`Export failed while ${stage}: ${error?.message || String(error)}`);
   }
@@ -317,7 +510,7 @@ ipcMain.handle('updater:open-release', async (_event, url) => {
   if (typeof url !== 'string' || !url.startsWith(prefix)) throw new Error('Invalid update release URL.');
   return shell.openExternal(url);
 });
-ipcMain.handle('course:platforms', () => ({ windows:fs.existsSync(path.join(process.resourcesPath,'templates','windows.zip')), macos:fs.existsSync(path.join(process.resourcesPath,'templates','macos-universal.zip')) }));
+ipcMain.handle('course:platforms', () => ({ windows:true, macos:true, default:process.platform }));
 ipcMain.handle('course:choose', async () => chooseCourse());
 ipcMain.handle('course:import-path', async (_event, p) => importCourse(p));
 ipcMain.handle('course:set-name', async (_event, name) => {
@@ -331,7 +524,7 @@ ipcMain.handle('course:set-name', async (_event, name) => {
 ipcMain.handle('course:launch', showCourse);
 ipcMain.handle('course:export', async (_event, targets) => {
   try { return { ok:true, wrapper:await exportWrapper(targets) }; }
-  catch (error) { return { ok:false, error:error?.message || String(error) }; }
+  catch (error) { await logExport(`Export request failed: ${error?.stack || error}`); return { ok:false, error:error?.message || String(error) }; }
 });
 ipcMain.handle('course:open-folder', async (_event, dir) => {
   if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Invalid folder path.');
