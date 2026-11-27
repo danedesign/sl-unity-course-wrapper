@@ -23,6 +23,11 @@ try {
     app.setPath('userData', path.join(app.getPath('appData'), 'Stacked Learning Courses', embeddedMeta.wrapperId));
   }
 } catch {}
+// Keep development launches from claiming the installed maker's single-instance
+// lock or reusing its imported-course state.
+if (!app.isPackaged && !embeddedWrapper) {
+  app.setPath('userData', path.join(app.getPath('appData'), `${app.getName()}-dev`));
+}
 const USER_COURSE_DIR = path.join(app.getPath('userData'), 'course');
 const USER_META_FILE = path.join(app.getPath('userData'), 'course.json');
 let APP_DIR = USER_COURSE_DIR;
@@ -272,11 +277,13 @@ else app.on('second-instance', (_event, argv) => {
     mainWindow.show(); mainWindow.focus();
   } else if (courseWindow && !courseWindow.isDestroyed()) {
     courseWindow.show(); courseWindow.focus();
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show(); mainWindow.focus();
   }
 });
 if (ownsAppLock) app.whenReady().then(async () => {
   await loadMetadata();
-  if (courseMeta && !oobeRequested) await showCourse();
+  if (embeddedWrapper && courseMeta && !oobeRequested) await showCourse();
   else createMainWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createMainWindow(); });
 });

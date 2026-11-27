@@ -9,6 +9,7 @@ Cross-platform Electron maker for exporting a Unity WebGL course into Windows, m
 - Launch course previews the imported course.
 - Export wrapper lets you choose Windows, macOS, or both, then select a parent folder. It creates a course-named folder with each selected native app shell and one shared course directory.
 - The generated app launches the embedded course immediately. Pass --oobe to reopen the import screen and replace that wrapper's course.
+- The maker always opens its import/export screen; only an exported course wrapper launches a course automatically. Development runs use separate app data so they cannot intercept the installed maker.
 
 The maker installers include Windows and universal macOS shell templates. The exported macOS app runs on Intel and Apple Silicon. GitHub Actions builds each shell and maker installer on the corresponding OS runner.
 
