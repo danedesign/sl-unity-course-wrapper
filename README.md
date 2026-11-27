@@ -7,11 +7,11 @@ Cross-platform Electron maker for exporting a Unity WebGL course into Windows, m
 - Import a Unity WebGL build folder or ZIP. It must contain index.html and Unity's Build output; a ZIP may have one enclosing folder.
 - The maker suggests a course name from Unity's loader productName or HTML title. Edit the name before export.
 - Launch course previews the imported course.
-- Export wrapper lets you choose Windows, macOS, or both, then select a parent folder. It creates a course-named folder with each selected native app shell and one shared course directory.
+- Build wrapper lets you choose Windows, macOS, or both, then select a parent folder. It creates a course-named output with each selected app. The Mac course is embedded inside the `.app`; Windows reads a `course` folder at the wrapper root.
 - The generated app launches the embedded course immediately. Pass --oobe to reopen the import screen and replace that wrapper's course.
 - The maker always opens its import/export screen; only an exported course wrapper launches a course automatically. Development runs use separate app data so they cannot intercept the installed maker.
 
-The maker installer is lightweight and does not bundle either native shell. When you export, it downloads only the selected Windows and/or universal macOS shell from that version's public GitHub release, checks its SHA-256, and caches it locally for later builds. Both maker editions can create either target. The macOS runtime is universal for Intel and Apple Silicon. When a Windows maker creates a macOS target, it keeps the symlink-preserving app ZIP intact; extract that ZIP into the generated `macOS` folder on a Mac before launching it.
+The maker installer is lightweight and does not bundle either native shell. When you export, it downloads only the selected Windows and/or universal macOS shell from that version's public GitHub release, checks its SHA-256, and caches it locally for later builds. Both maker editions can create either target. The macOS runtime is universal for Intel and Apple Silicon. When a Windows maker creates a macOS target, it injects the course into the symlink-preserving app ZIP; extract that ZIP into the generated `macOS` folder on a Mac before launching it.
 
 ## Run from source
 
@@ -43,12 +43,10 @@ Release builds include `latest.yml` and blockmaps alongside Windows installer as
 
 ## Export and diagnostics
 
-Folder imports use the source in place, avoiding an extra copy inside the maker. ZIP imports are unpacked into the maker's local course cache. Export copies the WebGL build once into the output and then extracts each selected app shell, reporting file-level progress. Export logs are written to the maker's user data directory under `logs/export.log`.
-
-The Windows installer for each release is also cached in `dist/releases/<version>/` in the development checkout.
+Folder imports use the source in place, avoiding an extra copy inside the maker. ZIP imports are unpacked into the maker's local course cache. Export reports file-level progress while copying Windows course files or embedding the course into the Mac app. Export logs are written to the maker's user data directory under `logs/export.log`.
 
 ## Technical notes
 
-Unity content is served through a loopback-only HTTP server, avoiding file:// restrictions without exposing content to the LAN. Imports are staged before replacing an existing course.
+Unity content is served through a loopback-only HTTP server, avoiding file:// restrictions without exposing content to the LAN. Folder imports are referenced in place; ZIP imports are unpacked into the maker's local course cache.
 
 The pilot installers are unsigned. macOS Gatekeeper may require an override until Developer ID signing and notarization are configured; Windows may show SmartScreen.

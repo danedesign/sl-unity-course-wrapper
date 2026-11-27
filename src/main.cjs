@@ -259,10 +259,13 @@ async function hashFile(file) {
 }
 
 async function extractRuntime(archive, destination, target) {
-  const command = process.platform === 'win32' ? 'tar.exe' : '/usr/bin/tar';
+  const command = process.platform === 'win32' ? 'tar.exe' : '/usr/bin/ditto';
+  const args = process.platform === 'win32'
+    ? ['-xvf', archive, '-C', destination]
+    : ['-x', '-k', '-V', archive, destination];
   await logExport(`Extracting ${target} runtime with ${command}: ${archive}`);
   await new Promise((resolve, reject) => {
-    const child = spawn(command, ['-xvf', archive, '-C', destination], { windowsHide:true });
+    const child = spawn(command, args, { windowsHide:true });
     let output = '';
     let count = 0;
     let timedOut = false;
@@ -292,9 +295,152 @@ async function extractRuntime(archive, destination, target) {
         sendExportProgress(`Prepared ${target} runtime · ${count} files`);
         logExport(`Extracted ${target} runtime (${count} entries)`);
         resolve();
-      } else reject(new Error(timedOut ? 'Runtime extraction stopped making progress for five minutes.' : `System ZIP extractor exited with code ${code}.`));
+      } else reject(new Error(timedOut ? 'Runtime extraction stopped making progress for five minutes.' : `Native ZIP extractor exited with code ${code}.`));
     });
   });
+}
+
+function zipDate(entry) {
+  return require('yauzl').dosDateTimeToDate(entry.lastModFileDate, entry.lastModFileTime);
+}
+
+async function directoryBytes(root) {
+  let total = 0;
+  for (const entry of await fsp.readdir(root, { withFileTypes:true })) {
+    const file = path.join(root, entry.name);
+    if (entry.isDirectory()) total += await directoryBytes(file);
+    else total += (await fsp.stat(file)).size;
+  }
+  return total;
+}
+
+async function addCourseTreeToZip(zip, sourceRoot, archiveRoot, progress) {
+  const entries = await fsp.readdir(sourceRoot, { withFileTypes:true });
+  for (const entry of entries) {
+    const file = path.join(sourceRoot, entry.name);
+    const archiveName = `${archiveRoot}/${entry.name.replace(/\\/g, '/')}`;
+    const stat = await fsp.lstat(file);
+    if (entry.isDirectory()) {
+      zip.addEmptyDirectory(`${archiveName}/`, { mtime:stat.mtime, mode:stat.mode });
+      await addCourseTreeToZip(zip, file, archiveName, progress);
+    } else if (entry.isSymbolicLink()) {
+      const real = await fsp.realpath(file);
+      if (real !== progress.root && !real.startsWith(progress.root + path.sep)) throw new Error(`Course link points outside the build folder: ${file}`);
+      const link = await fsp.readlink(file);
+      zip.addBuffer(Buffer.from(link), archiveName, { mtime:stat.mtime, mode:0o120777, compressionLevel:1 });
+      progress.bytes += Buffer.byteLength(link);
+    } else {
+      zip.addReadStreamLazy(archiveName, { mtime:stat.mtime, mode:stat.mode, compressionLevel:1 }, callback => {
+        const input = fs.createReadStream(file);
+        const meter = new Transform({ transform(chunk, _encoding, next) {
+          progress.bytes += chunk.length;
+          const percent = progress.total ? Math.floor(progress.bytes * 100 / progress.total) : 100;
+          if (percent >= progress.lastPercent + 1 || percent === 100) {
+            progress.lastPercent = percent;
+            sendExportProgress(`Embedding course in Mac app · ${percent}% · ${entry.name}`);
+          }
+          next(null, chunk);
+        } });
+        input.on('error', error => meter.destroy(error));
+        callback(null, input.pipe(meter));
+      });
+    }
+  }
+}
+
+async function embedCourseInMacArchive(shellArchive, outputArchive, courseRoot, metadata) {
+  const yauzl = require('yauzl');
+  const yazl = require('yazl');
+  const summary = await new Promise((resolve, reject) => {
+    yauzl.open(shellArchive, { lazyEntries:true }, (error, source) => {
+      if (error) return reject(error);
+      let bytes = 0, count = 0;
+      source.on('error', reject);
+      source.on('entry', entry => { bytes += entry.uncompressedSize; count++; source.readEntry(); });
+      source.on('end', () => resolve({ bytes, count }));
+      source.readEntry();
+    });
+  });
+  const courseBytes = await directoryBytes(courseRoot);
+  const metadataBuffer = Buffer.from(JSON.stringify(metadata, null, 2), 'utf8');
+  const total = summary.bytes + courseBytes + metadataBuffer.length;
+  const progress = { bytes:0, total, lastPercent:-1, root:await fsp.realpath(courseRoot) };
+  const temporary = `${outputArchive}.partial-${randomUUID()}`;
+  try {
+    await new Promise((resolve, reject) => {
+      const zip = new yazl.ZipFile();
+      const output = fs.createWriteStream(temporary);
+      let sourceZip;
+      let settled = false;
+      let appInfoFound = false;
+      let count = 0;
+      const fail = error => {
+        if (settled) return;
+        settled = true;
+        sourceZip?.close();
+        output.destroy();
+        zip.outputStream.destroy();
+        reject(error);
+      };
+      output.once('error', fail);
+      output.once('close', () => { if (!settled) { settled = true; resolve(); } });
+      zip.outputStream.once('error', fail);
+      zip.outputStream.pipe(output);
+      yauzl.open(shellArchive, { lazyEntries:true }, (error, opened) => {
+        if (error) return fail(error);
+        sourceZip = opened;
+        sourceZip.once('error', fail);
+        sourceZip.on('entry', entry => {
+          const name = entry.fileName.replace(/\\/g, '/');
+          const mode = (entry.externalFileAttributes >>> 16) & 0xffff;
+          const type = mode & 0o170000;
+          const isDirectory = name.endsWith('/') || type === 0o040000;
+          const entryMode = mode || (isDirectory ? 0o40755 : 0o100644);
+          if (name.endsWith('SL Course Wrapper.app/Contents/Info.plist')) appInfoFound = true;
+          count++;
+          if (isDirectory) {
+            try { zip.addEmptyDirectory(name, { mtime:zipDate(entry), mode:entryMode }); sourceZip.readEntry(); }
+            catch (cause) { fail(cause); }
+            return;
+          }
+          sourceZip.openReadStream(entry, (streamError, input) => {
+            if (streamError) return fail(streamError);
+            const meter = new Transform({ transform(chunk, _encoding, next) {
+              progress.bytes += chunk.length;
+              const percent = progress.total ? Math.floor(progress.bytes * 100 / progress.total) : 100;
+              if (percent >= progress.lastPercent + 1 || percent === 100) {
+                progress.lastPercent = percent;
+                sendExportProgress(`Embedding Mac app · ${percent}% · ${path.basename(name)}`);
+              }
+              next(null, chunk);
+            } });
+            input.once('error', fail);
+            meter.once('error', fail);
+            meter.once('end', () => sourceZip.readEntry());
+            input.pipe(meter);
+            try { zip.addReadStream(meter, name, { mtime:zipDate(entry), mode:entryMode, compressionLevel:1 }); }
+            catch (cause) { fail(cause); }
+          });
+        });
+        sourceZip.once('end', async () => {
+          if (!appInfoFound) return fail(new Error('The macOS runtime ZIP does not contain the expected app bundle.'));
+          try {
+            const appRoot = 'SL Course Wrapper.app/Contents/Resources';
+            await addCourseTreeToZip(zip, courseRoot, `${appRoot}/course`, progress);
+            zip.addBuffer(metadataBuffer, `${appRoot}/course.json`, { mtime:new Date(), mode:0o100644, compressionLevel:1 });
+            sendExportProgress('Finishing the Mac app archive…');
+            zip.end();
+          } catch (cause) { fail(cause); }
+        });
+        sourceZip.readEntry();
+      });
+    });
+    await fsp.rename(temporary, outputArchive);
+    await logExport(`Created Mac app archive with embedded course: ${outputArchive}; source entries=${summary.count}`);
+  } catch (error) {
+    await fsp.rm(temporary, { force:true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function copyTree(source, destination) {
@@ -356,11 +502,14 @@ async function exportWrapper(targets) {
   await fsp.mkdir(destination, { recursive:true });
   let stage = 'copying the WebGL build';
   try {
-    const wrapperMeta = { ...courseMeta, wrapperId:randomUUID() };
+    const { sourcePath: _sourcePath, ...exportMeta } = courseMeta;
+    const wrapperMeta = { ...exportMeta, wrapperId:randomUUID() };
     await logExport(`Export started: ${folderName}; targets=${selected.join(',')}; source=${APP_DIR}; destination=${destination}`);
-    sendExportProgress('Copying WebGL build…');
-    await copyTree(APP_DIR, path.join(destination, 'course'));
-    await fsp.writeFile(path.join(destination, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
+    if (selected.includes('windows')) {
+      sendExportProgress('Copying WebGL build for Windows…');
+      await copyTree(APP_DIR, path.join(destination, 'course'));
+      await fsp.writeFile(path.join(destination, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
+    }
     for (const target of selected) {
       stage = `preparing the ${target === 'windows' ? 'Windows' : 'macOS'} runtime`;
       sendExportProgress(`${stage[0].toUpperCase()}${stage.slice(1)}…`);
@@ -369,10 +518,15 @@ async function exportWrapper(targets) {
       const assetName = target === 'windows' ? 'windows.zip' : 'macos-universal.zip';
       const runtime = path.join(app.getPath('userData'), 'runtime-cache', `v${app.getVersion()}`, assetName);
       if (target === 'macos' && process.platform === 'win32') {
-        sendExportProgress('Keeping the macOS app ZIP intact for extraction on a Mac…');
-        await fsp.copyFile(runtime, path.join(targetDir, 'SL Course Wrapper.app.zip'));
+        await embedCourseInMacArchive(runtime, path.join(targetDir, 'SL Course Wrapper.app.zip'), APP_DIR, wrapperMeta);
       } else {
         await extractRuntime(runtime, targetDir, target === 'windows' ? 'Windows' : 'macOS');
+        if (target === 'macos') {
+          const resourcesDir = path.join(targetDir, 'SL Course Wrapper.app', 'Contents', 'Resources');
+          sendExportProgress('Embedding WebGL build inside the Mac app…');
+          await copyTree(APP_DIR, path.join(resourcesDir, 'course'));
+          await fsp.writeFile(path.join(resourcesDir, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
+        }
       }
       const expectedShell = target === 'windows'
         ? path.join(targetDir, 'SL Course Wrapper.exe')
@@ -384,11 +538,11 @@ async function exportWrapper(targets) {
     stage = 'finishing the wrapper';
     sendExportProgress('Finishing wrapper…');
     const directions = selected.map(target => target === 'windows'
-      ? 'Windows: open the Windows folder and run SL Course Wrapper.exe.'
+      ? 'Windows: open Windows and run SL Course Wrapper.exe. Course files are in the course folder at the wrapper root.'
       : process.platform === 'win32'
-        ? 'macOS: extract SL Course Wrapper.app.zip into the macOS folder, then open SL Course Wrapper.app.'
-        : 'macOS: open the macOS folder and run SL Course Wrapper.app.');
-    const readme = [courseMeta.name, '', 'Launch the app in the folder for your operating system:', ...directions, '', 'Course files are shared in the course folder.', 'Pass --oobe to the app to replace the build.'];
+        ? 'macOS: extract SL Course Wrapper.app.zip into the macOS folder, then open SL Course Wrapper.app. The course is embedded in the app.'
+        : 'macOS: open the macOS folder and run SL Course Wrapper.app. The course is embedded in the app.');
+    const readme = [courseMeta.name, '', 'Launch the app in the folder for your operating system:', ...directions, '', selected.includes('windows') ? 'The Windows app reads the course folder at the wrapper root; the macOS app embeds the course inside its app bundle.' : 'The WebGL course is embedded inside the macOS app bundle.', 'Pass --oobe to the app to replace the build.'];
     await fsp.writeFile(path.join(destination, 'READ-ME-FIRST.txt'), readme.join('\n'), 'utf8');
     await logExport(`Export completed: ${destination}`);
     return { path:destination, targets:selected, name:courseMeta.name };

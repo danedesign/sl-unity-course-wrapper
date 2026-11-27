@@ -1,6 +1,6 @@
 {
   "name": "sl-unity-course-wrapper",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A cross-platform Stacked Learning shell for one Unity WebGL course",
   "main": "src/main.cjs",
   "author": "Stacked Learning",
@@ -14,7 +14,9 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
-    "extract-zip": "^2.0.1"
+    "extract-zip": "^2.0.1",
+    "yauzl": "^2.10.0",
+    "yazl": "^3.3.1"
   },
   "devDependencies": {
     "electron": "^45.5.0",
@@ -53,11 +55,13 @@
       "category": "public.app-category.education",
       "artifactName": "SL-Course-Wrapper-${version}-${arch}-macOS.${ext}"
     },
-    "publish": [{
-      "provider": "github",
-      "owner": "stacked-learning",
-      "repo": "sl-unity-course-wrapper",
-      "releaseType": "release"
-    }]
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "stacked-learning",
+        "repo": "sl-unity-course-wrapper",
+        "releaseType": "release"
+      }
+    ]
   }
 }
