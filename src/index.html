@@ -23,8 +23,8 @@
         <div class="course-icon">WEB<br>GL</div><div class="course-info"><small>IMPORTED COURSE</small><strong id="detected-name">Course name</strong><span id="source-title"></span></div><span class="badge"><i></i> Ready</span>
       </div>
       <div class="name-row hidden" id="name-row"><label for="course-name">Course title</label><input id="course-name" maxlength="100" autocomplete="off"><button class="secondary" id="save-name">Save name</button></div>
-      <div class="export-row hidden" id="export-row"><div><small>BUILD FOR THIS COMPUTER</small><strong id="target-name">Windows</strong><span>The app shell is copied with this course embedded.</span></div><button class="primary" id="export">Export wrapper <span>↗</span></button></div>
-      <p class="platform-note hidden" id="platform-note">To create the other operating system’s app, run the maker on that OS. Its runtime bundle is platform-specific.</p>
+      <div class="export-row hidden" id="export-row"><div class="target-options"><small>BUILD FOR</small><label><input type="checkbox" id="target-win"> Windows</label><label><input type="checkbox" id="target-mac"> macOS</label><span>Choose either platform or both. Course files are stored once.</span></div><button class="primary" id="export">Export wrapper <span>↗</span></button></div>
+      <p class="platform-note hidden" id="platform-note">The exported folder contains a native app for each selected platform and one shared course folder.</p>
       <div class="actions"><button class="text-button hidden" id="replace">Replace build</button><button class="primary launch hidden" id="launch">Launch course <span>→</span></button></div>
       <div class="status hidden" id="status" role="status"></div>
     </section>

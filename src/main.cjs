@@ -6,10 +6,20 @@ const http = require('node:http');
 const { randomUUID } = require('node:crypto');
 const extractZip = require('extract-zip');
 
+function embeddedCourseRoot() {
+  const candidates = [path.join(process.resourcesPath, 'course')];
+  if (process.platform === 'win32') candidates.push(path.resolve(process.resourcesPath, '..', '..', 'course'));
+  if (process.platform === 'darwin') candidates.push(path.resolve(process.resourcesPath, '..', '..', '..', '..', 'course'));
+  return candidates.find(root => fs.existsSync(path.join(root, 'index.html'))) || candidates[0];
+}
+const EMBEDDED_COURSE_DIR = embeddedCourseRoot();
+const EMBEDDED_META_FILE = path.join(path.dirname(EMBEDDED_COURSE_DIR), 'course.json');
+try {
+  const embeddedMeta = JSON.parse(fs.readFileSync(EMBEDDED_META_FILE, 'utf8'));
+  if (embeddedMeta.wrapperId) app.setPath('userData', path.join(app.getPath('appData'), 'Stacked Learning Courses', embeddedMeta.wrapperId));
+} catch {}
 const USER_COURSE_DIR = path.join(app.getPath('userData'), 'course');
 const USER_META_FILE = path.join(app.getPath('userData'), 'course.json');
-const EMBEDDED_COURSE_DIR = path.join(process.resourcesPath, 'course');
-const EMBEDDED_META_FILE = path.join(process.resourcesPath, 'course.json');
 let APP_DIR = USER_COURSE_DIR;
 let META_FILE = USER_META_FILE;
 let oobeRequested = process.argv.includes('--oobe');
@@ -138,10 +148,13 @@ function safeFolderName(name) {
   return (safe || 'SL-Course-Wrapper').slice(0, 100);
 }
 
-async function exportWrapper() {
+async function exportWrapper(targets) {
   if (!courseMeta) throw new Error('Import a course before exporting a wrapper.');
   if (!app.isPackaged) throw new Error('Export is available in the installed maker app. Package the maker first, then import and export from that app.');
-  const platform = process.platform;
+  const selected = [...new Set(Array.isArray(targets) ? targets : [])];
+  if (!selected.length || selected.some(item => !['windows', 'macos'].includes(item))) throw new Error('Choose Windows, macOS, or both.');
+  const templates = { windows:path.join(process.resourcesPath,'templates','windows.zip'), macos:path.join(process.resourcesPath,'templates','macos-universal.zip') };
+  for (const target of selected) if (!fs.existsSync(templates[target])) throw new Error(`The ${target === 'windows' ? 'Windows' : 'macOS'} runtime template is missing. Reinstall the latest maker release.`);
   const output = await dialog.showOpenDialog(mainWindow, { title:'Choose the parent folder for your wrapper', properties:['openDirectory','createDirectory'] });
   if (output.canceled || !output.filePaths[0]) return null;
   const parent = output.filePaths[0];
@@ -151,23 +164,20 @@ async function exportWrapper() {
   while (fs.existsSync(destination)) destination = path.join(parent, `${folderName} (${suffix++})`);
   await fsp.mkdir(destination, { recursive:true });
   try {
-    let embeddedRoot;
-    if (platform === 'win32') {
-      await fsp.cp(path.dirname(process.execPath), destination, { recursive:true, dereference:false });
-      embeddedRoot = path.join(destination, 'resources');
-    } else if (platform === 'darwin') {
-      const appBundle = path.resolve(path.dirname(process.execPath), '..', '..');
-      const bundleDestination = path.join(destination, `${folderName}.app`);
-      await fsp.cp(appBundle, bundleDestination, { recursive:true, dereference:false });
-      embeddedRoot = path.join(bundleDestination, 'Contents', 'Resources');
-    } else throw new Error('Wrapper export currently supports Windows and macOS.');
-    await fsp.cp(APP_DIR, path.join(embeddedRoot, 'course'), { recursive:true, dereference:false });
-    await fsp.writeFile(path.join(embeddedRoot, 'course.json'), JSON.stringify({ ...courseMeta, wrapperId:randomUUID() }, null, 2), 'utf8');
-    const instructions = platform === 'win32'
-      ? `Launch ${path.basename(process.execPath)} to start “${courseMeta.name}”.\nRun ${path.basename(process.execPath)} --oobe to replace the course.\n`
-      : `Open ${folderName}.app to start “${courseMeta.name}”.\nRun the app with --oobe to replace the course.\n`;
-    await fsp.writeFile(path.join(destination, 'READ-ME-FIRST.txt'), instructions, 'utf8');
-    return { path:destination, platform, name:courseMeta.name };
+    const wrapperMeta = { ...courseMeta, wrapperId:randomUUID() };
+    await fsp.cp(APP_DIR, path.join(destination, 'course'), { recursive:true, dereference:false });
+    await fsp.writeFile(path.join(destination, 'course.json'), JSON.stringify(wrapperMeta, null, 2), 'utf8');
+    for (const target of selected) {
+      const targetDir = path.join(destination, target === 'windows' ? 'Windows' : 'macOS');
+      await fsp.mkdir(targetDir, { recursive:true });
+      await extractZip(templates[target], { dir:targetDir });
+    }
+    const directions = selected.map(target => target === 'windows'
+      ? 'Windows: open the Windows folder and run SL Course Wrapper.exe.'
+      : 'macOS: open the macOS folder and run SL Course Wrapper.app.');
+    const readme = [courseMeta.name, '', 'Launch the app in the folder for your operating system:', ...directions, '', 'Course files are shared in the course folder.', 'Pass --oobe to the app to replace the build.'];
+    await fsp.writeFile(path.join(destination, 'READ-ME-FIRST.txt'), readme.join('\n'), 'utf8');
+    return { path:destination, targets:selected, name:courseMeta.name };
   } catch (error) {
     await fsp.rm(destination, { recursive:true, force:true }).catch(() => {});
     throw error;
@@ -214,7 +224,7 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('before-quit', () => { server?.close(); });
 
 ipcMain.handle('course:status', async () => ({ meta:courseMeta, oobe:oobeRequested, busy }));
-ipcMain.handle('course:platform', () => process.platform);
+ipcMain.handle('course:platforms', () => ({ windows:fs.existsSync(path.join(process.resourcesPath,'templates','windows.zip')), macos:fs.existsSync(path.join(process.resourcesPath,'templates','macos-universal.zip')) }));
 ipcMain.handle('course:choose', async () => chooseCourse());
 ipcMain.handle('course:import-path', async (_event, p) => importCourse(p));
 ipcMain.handle('course:set-name', async (_event, name) => {
@@ -226,7 +236,7 @@ ipcMain.handle('course:set-name', async (_event, name) => {
   return courseMeta;
 });
 ipcMain.handle('course:launch', showCourse);
-ipcMain.handle('course:export', exportWrapper);
+ipcMain.handle('course:export', (_event, targets) => exportWrapper(targets));
 ipcMain.handle('course:open-folder', async (_event, dir) => {
   if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Invalid folder path.');
   return shell.openPath(dir);

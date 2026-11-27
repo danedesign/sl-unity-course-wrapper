@@ -5,7 +5,7 @@ const veil = $('veil');
 let currentMeta = null;
 
 function showStatus(message, ok = false) { statusBox.textContent = message; statusBox.classList.toggle('ok', ok); statusBox.classList.remove('hidden'); }
-function setBusy(active, text = 'Preparing course…') { veil.classList.toggle('hidden', !active); $('busy-text').textContent = text; $('choose').disabled = active; $('launch').disabled = active; }
+function setBusy(active, text = 'Preparing course…') { veil.classList.toggle('hidden', !active); $('busy-text').textContent = text; $('choose').disabled = active; $('launch').disabled = active; $('export').disabled = active; }
 function render(meta) {
   currentMeta = meta;
   if (!meta) return;
@@ -40,11 +40,15 @@ $('save-name').addEventListener('click', async () => {
 });
 $('export').addEventListener('click', async () => {
   try {
+    const targets = [];
+    if ($('target-win').checked) targets.push('windows');
+    if ($('target-mac').checked) targets.push('macos');
+    if (!targets.length) throw new Error('Choose Windows, macOS, or both.');
     await window.slCourse.setName($('course-name').value);
     setBusy(true, 'Preparing your wrapper folder…');
-    const result = await window.slCourse.exportWrapper();
+    const result = await window.slCourse.exportWrapper(targets);
     if (result) {
-      showStatus(`Wrapper exported to ${result.path}`, true);
+      showStatus(`Wrapper exported for ${result.targets.map(x => x === 'windows' ? 'Windows' : 'macOS').join(' and ')} to ${result.path}`, true);
       await window.slCourse.openFolder(result.path);
     }
   } catch (e) { showStatus(e.message || 'Could not export this wrapper.'); }
@@ -55,9 +59,12 @@ for (const event of ['dragleave','drop']) dropzone.addEventListener(event, e => 
 dropzone.addEventListener('drop', () => { setBusy(true, 'Importing WebGL build…'); statusBox.classList.add('hidden'); });
 dropzone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); } });
 window.slCourse.status().then(async ({meta,oobe}) => {
-  const platform = await window.slCourse.platform();
-  $('target-name').textContent = platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform;
-  if (platform !== 'darwin' && platform !== 'win32') $('export').disabled = true;
+  const platforms = await window.slCourse.platforms();
+  $('target-win').disabled = !platforms.windows;
+  $('target-mac').disabled = !platforms.macos;
+  $('target-win').checked = platforms.windows;
+  $('target-mac').checked = platforms.macos;
+  if (!platforms.windows || !platforms.macos) $('export').disabled = true;
   render(meta);
   if (oobe) showStatus(meta ? 'Select a replacement build to update this wrapper.' : 'Add a WebGL build to get started.', true);
 });

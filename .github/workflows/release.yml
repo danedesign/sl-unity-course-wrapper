@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
+  prepare-windows-shell:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,16 +19,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run dist:win
+      - shell: pwsh
+        run: New-Item -ItemType Directory -Force build/templates | Out-Null
+      - run: npx electron-builder --dir --win --x64 --publish never
+      - shell: pwsh
+        run: Compress-Archive -Path dist/win-unpacked/* -DestinationPath build/templates/windows.zip -CompressionLevel Optimal
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-installers
-          path: |
-            dist/*.exe
-            dist/*.zip
+          name: windows-shell
+          path: build/templates/windows.zip
           if-no-files-found: error
 
-  build-macos:
+  prepare-macos-shell:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,10 +39,69 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: mkdir -p build/templates
+      - run: npx electron-builder --dir --mac --universal --publish never
+      - name: Zip universal shell template
+        shell: bash
+        run: |
+          APP_PATH="$(find dist -type d -name 'SL Course Wrapper.app' -print -quit)"
+          test -n "$APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" build/templates/macos-universal.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-shell
+          path: build/templates/macos-universal.zip
+          if-no-files-found: error
+
+  build-windows-maker:
+    needs: [prepare-windows-shell, prepare-macos-shell]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-shell
+          path: build/templates
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-shell
+          path: build/templates
+      - run: npm ci
+      - run: npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-maker
+          path: |
+            dist/*.exe
+            dist/*.zip
+          if-no-files-found: error
+
+  build-macos-maker:
+    needs: [prepare-windows-shell, prepare-macos-shell]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-shell
+          path: build/templates
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-shell
+          path: build/templates
+      - run: npm ci
       - run: npm run dist:mac
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-installers
+          name: macos-maker
           path: |
             dist/*.dmg
             dist/*.zip
@@ -48,7 +109,7 @@ jobs:
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-windows, build-macos]
+    needs: [build-windows-maker, build-macos-maker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

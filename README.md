@@ -1,17 +1,16 @@
 # SL Unity Course Wrapper Maker
 
-Cross-platform Electron maker for exporting one Unity WebGL course into a Windows wrapper folder or macOS app bundle.
+Cross-platform Electron maker for exporting a Unity WebGL course into Windows, macOS, or dual-platform wrapper folders.
 
 ## Workflow
 
-- Open the SL welcome screen and import a WebGL build folder or ZIP.
-- The build must contain Unity's index.html and Build output. A ZIP may have one enclosing folder.
-- The maker suggests a course name from Unity's loader productName or HTML title. Edit it before export.
-- Launch course previews the build in the maker.
-- Export wrapper asks for a parent folder, creates a uniquely named course folder, copies the maker's native app shell, embeds the course, and opens the output folder.
-- Exported wrappers launch the embedded course directly. Pass --oobe to open the replacement screen. Replacement content is isolated in that wrapper's app-data directory.
+- Import a Unity WebGL build folder or ZIP. It must contain index.html and Unity's Build output; a ZIP may have one enclosing folder.
+- The maker suggests a course name from Unity's loader productName or HTML title. Edit the name before export.
+- Launch course previews the imported course.
+- Export wrapper lets you choose Windows, macOS, or both, then select a parent folder. It creates a course-named folder with each selected native app shell and one shared course directory.
+- The generated app launches the embedded course immediately. Pass --oobe to reopen the import screen and replace that wrapper's course.
 
-The exported native wrapper matches the operating system running the maker. Use the Windows maker to export a Windows wrapper and the Mac maker to export a macOS app bundle. This pilot does not cross-build a course wrapper for both operating systems from one computer.
+The maker installers include Windows and universal macOS shell templates. The exported macOS app runs on Intel and Apple Silicon. GitHub Actions builds each shell and maker installer on the corresponding OS runner.
 
 ## Run from source
 
@@ -20,24 +19,19 @@ Install dependencies once, then start the maker:
     npm install
     npm start
 
-For the replacement screen:
+Open the replacement screen during development:
 
     npm run start:oobe
 
 ## Build the maker installers
 
-Build the Windows installer on Windows:
-
     npm run dist:win
-
-Build the macOS DMG and ZIP on macOS:
-
     npm run dist:mac
 
-The GitHub Actions release workflow builds both platforms and attaches their installers to a version-tag release.
+The GitHub Actions release workflow builds Windows and macOS installers and attaches them to each version-tag release. It embeds both runtime shell templates in the maker packages.
 
 ## Technical notes
 
-The Unity content is served through a loopback-only HTTP server, which avoids file:// restrictions and does not expose it to the LAN. Imported courses are staged before replacing the current course.
+Unity content is served through a loopback-only HTTP server, avoiding file:// restrictions without exposing content to the LAN. Imports are staged before replacing an existing course.
 
-The pilot's Windows and macOS distributables are unsigned. macOS Gatekeeper may require an override until Developer ID signing and notarization are configured; Windows may show SmartScreen.
+The pilot installers are unsigned. macOS Gatekeeper may require an override until Developer ID signing and notarization are configured; Windows may show SmartScreen.
